@@ -2269,7 +2269,7 @@ ar: {
 /* ===== src/app.js ===== */
 'use strict';
 /* CueNest — מעטפת: שפות, אחסון, ניווט, מסכים, אונליין (NestLink). המשחקים נרשמים ב-Games. */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.0.1';
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const store = {
@@ -3107,7 +3107,7 @@ const CueView = (function () {
       else txt = this.lv ? T('c_stars_hint', { a: this.lv.s3, b: this.lv.s2 }) : T('c_your');
       if (txt !== this.statusSig) { this.statusSig = txt; $('[data-status]', el).textContent = txt; }
       // banner
-      const bn = $('[data-banner]', el), b0 = this.banners[0], bs = b0 ? b0.txt + b0.cls + (b0.sub || '') : '';
+      const bn = $('[data-banner]', el), b0 = this.banners[0], bs = b0 ? b0.txt + b0.cls + (b0.sub || '') : '-';
       if (bs !== this.bannerSig) { this.bannerSig = bs; bn.innerHTML = b0 ? `<div class="b ${b0.cls}"><b>${esc(b0.txt)}</b>${b0.sub ? `<small>${esc(b0.sub)}</small>` : ''}</div>` : ''; }
       const rb = $('[data-replay]', el); if (rb) { const show = this.lastShot && this.state === 'aim' && !this.rp ? '' : 'none'; if (rb.style.display !== show) rb.style.display = show; }
     }
