@@ -741,7 +741,8 @@ const NestLink = (() => {
   const C = typeof module !== 'undefined' && module.exports ? require('./cue.js') : root.Cue;
   const clamp = C.clamp, prng = C.prng;
   const SQ3 = Math.sqrt(3);
-  const KINDS = ['p8', 'p9', 'snk', 'snk6'];
+  const KINDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'];
+  const TOP = { p9: 9, p10: 10 }, RACE = { pb: 5, p14: 30 };   // number games: the ball that wins; race games: points to win
   const isSnk = k => k === 'snk' || k === 'snk6';
 
   /* ---------- ball look (for the UI) ---------- */
@@ -763,7 +764,7 @@ const NestLink = (() => {
   function poolSpots(sp) { return { head: [sp.L * 0.25, sp.W / 2], foot: [sp.L * 0.75, sp.W / 2] }; }
   function shuffled(arr, R) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = (R() * (i + 1)) | 0; const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
   function rackPool(sp, kind, seed) {
-    const R0 = prng(seed * 7 + 3), R = sp.R, sx = poolSpots(sp).foot[0], sy = poolSpots(sp).foot[1], pos = [], balls = new Array(kind === 'p8' ? 16 : 10), dx = SQ3 * R * EPS, dy = 2 * R * EPS;
+    const R0 = prng(seed * 7 + 3), R = sp.R, sx = poolSpots(sp).foot[0], sy = poolSpots(sp).foot[1], pos = [], balls = new Array(kind === 'p8' || kind === 'p14' ? 16 : kind === 'p10' ? 11 : 10), dx = SQ3 * R * EPS, dy = 2 * R * EPS;
     if (kind === 'p8') {
       for (let r = 0; r < 5; r++) for (let k = 0; k <= r; k++) pos.push([sx + r * dx, sy + (k - r / 2) * dy, r, k]);
       // index 4 = middle of row 2 = the 8; the two back corners are one solid and one stripe
@@ -771,6 +772,12 @@ const NestLink = (() => {
       const cornerA = (corner ? solids : stripes).shift(), cornerB = (corner ? stripes : solids).shift(), rest = shuffled(solids.concat(stripes), R0), placed = new Array(15);
       placed[10] = cornerA; placed[14] = cornerB; placed[4] = 8; let q = 0; for (let i = 0; i < 15; i++) if (placed[i] === undefined) placed[i] = rest[q++];
       pos.forEach((p, i) => { balls[placed[i]] = { x: p[0], y: p[1] }; });
+    } else if (kind === 'p14') {   // fifteen balls, random order, full triangle
+      for (let r = 0; r < 5; r++) for (let k = 0; k <= r; k++) pos.push([sx + r * dx, sy + (k - r / 2) * dy]);
+      const ord = shuffled([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], R0); pos.forEach((p, i) => { balls[ord[i]] = { x: p[0], y: p[1] }; });
+    } else if (kind === 'p10') {   // triangle: 1 at the apex, 10 in the middle of the third row
+      const slots = []; for (let r = 0; r < 4; r++) for (let k = 0; k <= r; k++) slots.push([sx + r * dx, sy + (k - r / 2) * dy]);
+      const others = shuffled([2, 3, 4, 5, 6, 7, 8, 9], R0), order = [1, others[0], others[1], others[2], 10, others[3], others[4], others[5], others[6], others[7]]; slots.forEach((p, i) => { balls[order[i]] = { x: p[0], y: p[1] }; });
     } else {   // diamond: 1 on the foot spot, 9 in the middle
       const rows = [1, 2, 3, 2, 1], others = shuffled([2, 3, 4, 5, 6, 7, 8], R0), slots = []; for (let r = 0; r < 5; r++) for (let k = 0; k < rows[r]; k++) slots.push([sx + r * dx, sy + (k - (rows[r] - 1) / 2) * dy]);
       const order = [1, others[0], others[1], others[2], 9, others[3], others[4], others[5], others[6]]; slots.forEach((p, i) => { balls[order[i]] = { x: p[0], y: p[1] }; });
@@ -814,7 +821,8 @@ const NestLink = (() => {
     const balls = isSnk(kind) ? rackSnooker(sp, kind === 'snk6' ? 6 : 15) : rackPool(sp, kind, seed), s = C.make(sp, balls);
     const g = { kind, sp, s, seed, turn: opts.first || 0, k: 0, ih: null, over: false, winner: null, log: [], fouls: [0, 0], sc: [0, 0], opts };
     if (kind === 'p8') { g.grp = [null, null]; g.open = true; g.broke = false; g.ih = 'kitchen'; }
-    else if (kind === 'p9') { g.broke = false; g.ih = 'kitchen'; }
+    else if (kind === 'p9' || kind === 'p10') { g.broke = false; g.ih = 'kitchen'; g.top = TOP[kind]; }
+    else if (kind === 'pb' || kind === 'p14') { g.broke = false; g.ih = 'kitchen'; g.race = RACE[kind]; }
     else { g.reds = kind === 'snk6' ? 6 : 15; g.phase = 'red'; g.nextCol = 16; g.free = false; g.brk = 0; g.ih = 'D'; g.best = [0, 0]; }
     return g;
   }
@@ -843,7 +851,8 @@ const NestLink = (() => {
     const grp = g.grp[who], lo = grp === 's' ? 1 : 9, hi = grp === 's' ? 7 : 15; for (let i = lo; i <= hi; i++) if (s.on[i]) out.push(i);
     return out.length ? out : (s.on[8] ? [8] : []);
   }
-  function p9Targets(g) { for (let i = 1; i <= 9; i++) if (g.s.on[i]) return [i]; return []; }
+  function p9Targets(g) { for (let i = 1; i <= (g.top || 9); i++) if (g.s.on[i]) return [i]; return []; }
+  function anyTargets(g) { const o = []; for (let i = 1; i <= 15; i++) if (g.s.on[i]) o.push(i); return o; }
   function snkOn(g) {   // balls that count as "on" for the player to move
     const s = g.s, out = [];
     if (g.phase === 'red') { for (let i = 1; i <= 15; i++) if (s.on[i]) out.push(i); }
@@ -855,7 +864,8 @@ const NestLink = (() => {
   function targets(g) {   // balls that are legal first contacts right now
     if (g.kind === 'prac') return pracTargets(g);
     if (g.kind === 'p8') return p8Targets(g, g.turn);
-    if (g.kind === 'p9') return p9Targets(g);
+    if (g.kind === 'p9' || g.kind === 'p10') return p9Targets(g);
+    if (g.kind === 'pb' || g.kind === 'p14') return anyTargets(g);
     const on = snkOn(g); if (g.free) { const o = []; for (let i = 1; i <= 21; i++) if (g.s.on[i]) o.push(i); return o; } return on;
   }
   function snookered(g) {   // can the cue ball (where it lies) not hit ANY ball that is on, along a free straight line to its visible side?
@@ -921,9 +931,48 @@ const NestLink = (() => {
     let railBalls = 0; for (let i = 1; i < s.n; i++) if (ev.rail[i]) railBalls++;
     if (isBreak && !objs.length && railBalls < 4 && !R.foul.includes('scratch') && !R.foul.includes('nohit')) R.foul.push('badbreak');
     const foul = R.foul.length > 0; g.broke = true;
-    if (objs.includes(9)) { if (!foul) { R.win = who; R.msg.push('win9'); } else { respotPool(g, 9); R.msg.push('respot9'); } }
+    const top = g.top || 9; if (objs.includes(top)) { if (!foul) { R.win = who; R.msg.push('win' + top); } else { respotPool(g, top); R.msg.push('respot' + top); } }
     if (foul) { g.fouls[who]++; g.ih = 'any'; if (cuePot) { s.on[0] = 1; const d = defaultCue(g); s.x[0] = d[0]; s.y[0] = d[1]; } if (g.fouls[who] >= 3 && R.win === null) { R.win = opp; R.msg.push('three'); } else if (g.fouls[who] === 2) R.msg.push('twofouls'); }
     else { g.fouls[who] = 0; R.keep = objs.length > 0; }
+    if (R.win === null && !R.keep) g.turn = opp;
+    if (R.win !== null) { g.over = true; g.winner = R.win; }
+    R.nextIH = g.ih; return R;
+  }
+
+  /* ---------- settle: bank pool (only banked balls count; first to g.race) ---------- */
+  function settleBank(g, ev, pre) {
+    const s = g.s, who = g.turn, opp = 1 - who, R = { who, foul: [], pts: 0, potted: [], keep: false, win: null, msg: [] };
+    const objs = ev.potted.filter(i => i !== 0), cuePot = ev.potted.includes(0); R.potted = objs.slice(); R.cuePot = cuePot;
+    if (cuePot) R.foul.push('scratch'); if (ev.first < 0) R.foul.push('nohit');
+    if (!R.foul.length && !objs.length && !ev.railAfter) R.foul.push('norail');
+    const foul = R.foul.length > 0; g.broke = true;
+    const banks = objs.filter(i => ev.rail[i]); if (!foul) { R.pts = banks.length; g.sc[who] += banks.length; R.keep = banks.length > 0; if (objs.length > banks.length && !banks.length) R.msg.push('nobank'); }
+    if (foul) { g.ih = 'any'; g.fouls[who]++; if (cuePot) { s.on[0] = 1; const d = defaultCue(g); s.x[0] = d[0]; s.y[0] = d[1]; } }
+    if (g.sc[who] >= g.race) { R.win = who; R.msg.push('winbank'); }
+    else { let left = 0; for (let i = 1; i <= 9; i++) if (s.on[i]) left++; if (!left) { if (g.sc[0] !== g.sc[1]) { R.win = g.sc[0] > g.sc[1] ? 0 : 1; R.msg.push('winbank'); } else { respotPool(g, 9); R.msg.push('tie_bank'); R.keep = false; } } }
+    if (R.win === null && !R.keep) g.turn = opp;
+    if (R.win !== null) { g.over = true; g.winner = R.win; }
+    R.nextIH = g.ih; return R;
+  }
+  /* ---------- settle: straight pool 14.1 (race to g.race, one point a ball, a foul costs one) ---------- */
+  function rerack141(g) {
+    const s = g.s, sp = g.sp, R = sp.R, f = poolSpots(sp).foot, dx = SQ3 * R * EPS, dy = 2 * R * EPS, slots = [];
+    for (let r = 0; r < 5; r++) for (let k = 0; k <= r; k++) slots.push([f[0] + r * dx, f[1] + (k - r / 2) * dy]);
+    let last = 0; for (let i = 1; i <= 15; i++) if (s.on[i]) last = i;
+    const inZone = (x, y) => { for (let q = 1; q < slots.length; q++) { const ex = x - slots[q][0], ey = y - slots[q][1]; if (ex * ex + ey * ey < 6 * R * R) return true; } return false; };
+    for (const i of [0, last]) if (i === 0 ? s.on[0] : last) { if (inZone(s.x[i], s.y[i])) { const h = poolSpots(sp).head; let x = h[0], y = h[1]; if (i === 0 && last && Math.hypot(x - s.x[last], y - s.y[last]) < 3 * R) x -= 3 * R; const p = nearFree(g, x, y, i); s.x[i] = p[0]; s.y[i] = p[1]; } }
+    let q = last ? 1 : 0; for (let i = 1; i <= 15; i++) { if (i === last) continue; s.x[i] = slots[q][0]; s.y[i] = slots[q][1]; s.on[i] = 1; s.vx[i] = s.vy[i] = s.wx[i] = s.wy[i] = s.wz[i] = 0; q++; }
+  }
+  function settle141(g, ev, pre) {
+    const s = g.s, who = g.turn, opp = 1 - who, R = { who, foul: [], pts: 0, potted: [], keep: false, win: null, msg: [] };
+    const objs = ev.potted.filter(i => i !== 0), cuePot = ev.potted.includes(0); R.potted = objs.slice(); R.cuePot = cuePot;
+    if (cuePot) R.foul.push('scratch'); if (ev.first < 0) R.foul.push('nohit');
+    if (!R.foul.length && !objs.length && !ev.railAfter) R.foul.push('norail');
+    const foul = R.foul.length > 0; g.broke = true; R.pts = objs.length; g.sc[who] += objs.length;
+    if (foul) { g.sc[who] -= 1; R.fv = 1; g.fouls[who]++; g.ih = cuePot ? 'kitchen' : null; if (cuePot) { s.on[0] = 1; const d = defaultCue(g); s.x[0] = d[0]; s.y[0] = d[1]; } } else { g.fouls[who] = 0; R.keep = objs.length > 0; }
+    let left = 0; for (let i = 1; i <= 15; i++) if (s.on[i]) left++;
+    if (left <= 1 && g.sc[who] < g.race) { rerack141(g); R.msg.push('rerack14'); }
+    if (g.sc[who] >= g.race) { R.win = who; R.msg.push('win14'); }
     if (R.win === null && !R.keep) g.turn = opp;
     if (R.win !== null) { g.over = true; g.winner = R.win; }
     R.nextIH = g.ih; return R;
@@ -1001,11 +1050,11 @@ const NestLink = (() => {
   /* ---------- the one entry point ---------- */
   function pre(g) {
     const on = []; for (let i = 0; i < g.s.n; i++) on[i] = g.s.on[i];
-    return { on, targets: targets(g), onList: isSnk(g.kind) ? snkOn(g) : [], low: g.kind === 'p9' ? p9Targets(g)[0] : 0, phase: g.phase, free: g.free, nextCol: g.nextCol };
+    return { on, targets: targets(g), onList: isSnk(g.kind) ? snkOn(g) : [], low: g.kind === 'p9' || g.kind === 'p10' ? p9Targets(g)[0] : 0, phase: g.phase, free: g.free, nextCol: g.nextCol };
   }
   function settle(g, ev, p) {
     p = p || pre(g); let R;
-    if (g.kind === 'prac') R = settlePrac(g, ev, p); else if (g.kind === 'p8') R = settle8(g, ev, p); else if (g.kind === 'p9') R = settle9(g, ev, p); else R = settleSnk(g, ev, p);
+    if (g.kind === 'prac') R = settlePrac(g, ev, p); else if (g.kind === 'p8') R = settle8(g, ev, p); else if (g.kind === 'p9' || g.kind === 'p10') R = settle9(g, ev, p); else if (g.kind === 'pb') R = settleBank(g, ev, p); else if (g.kind === 'p14') R = settle141(g, ev, p); else R = settleSnk(g, ev, p);
     g.k++; R.k = g.k; if (g.kind !== 'prac') {} g.log.push({ who: R.who, foul: R.foul.slice(), potted: R.potted.slice(), pts: R.pts });
     if (g.s.on[0] === 0) { g.s.on[0] = 1; const d = defaultCue(g); g.s.x[0] = d[0]; g.s.y[0] = d[1]; }
     return R;
@@ -1024,7 +1073,8 @@ const NestLink = (() => {
   function status(g) {    // for the HUD: simple facts the UI turns into words
     const o = { turn: g.turn, over: g.over, winner: g.winner, ih: g.ih };
     if (g.kind === 'p8') { o.grp = g.grp.slice(); o.open = g.open; o.left = [0, 0]; if (!g.open) for (let w = 0; w < 2; w++) o.left[w] = ballsOf(g, g.grp[w]).filter(i => g.s.on[i]).length; }
-    if (g.kind === 'p9') o.low = p9Targets(g)[0] || 0;
+    if (g.kind === 'p9' || g.kind === 'p10') o.low = p9Targets(g)[0] || 0;
+    if (g.kind === 'pb' || g.kind === 'p14') { o.sc = g.sc.slice(); o.race = g.race; let n = 0; for (let i = 1; i <= 15; i++) if (g.s.on[i]) n++; o.left = n; }
     if (isSnk(g.kind)) { o.sc = g.sc.slice(); o.phase = g.phase; o.reds = g.reds; o.next = g.nextCol; o.free = g.free; o.brk = g.brk; o.rem = remainingPoints(g); }
     return o;
   }
@@ -1055,10 +1105,27 @@ const NestLink = (() => {
     for (let i = 0; i < s.n; i++) { if (!s.on[i] || i === skipA || i === skipB) continue; const px = s.x[i] - ax, py = s.y[i] - ay; let t = (px * dx + py * dy) / L2; if (t < 0 || t > 1) continue; const qx = px - t * dx, qy = py - t * dy; if (qx * qx + qy * qy < lim) return true; }
     return false;
   }
+  function bankCands(g, b, aims, out) {   // one-cushion banks: aim the object ball at the pocket mirrored in a cushion
+    const s = g.s, sp = g.sp, R = sp.R, cx = s.x[0], cy = s.y[0], bx = s.x[b], by = s.y[b];
+    const rails = [[0, R], [0, sp.L - R], [1, R], [1, sp.W - R]];   // [axis (0 = x, 1 = y), position of the ball centre line]
+    for (const rl of rails) for (let k = 0; k < 6; k++) {
+      const A = aims[k]; let mx = A[0], my = A[1]; if (rl[0] === 0) mx = 2 * rl[1] - mx; else my = 2 * rl[1] - my;
+      const ux0 = mx - bx, uy0 = my - by, lt = Math.sqrt(ux0 * ux0 + uy0 * uy0); if (lt < 0.2) continue; const ux = ux0 / lt, uy = uy0 / lt;
+      const den = rl[0] === 0 ? ux : uy; if (Math.abs(den) < 0.12) continue; const tt = ((rl[0] === 0 ? rl[1] - bx : rl[1] - by)) / den; if (tt <= 2 * R) continue;
+      const qx = bx + ux * tt, qy = by + uy * tt; if (qx < 2 * R || qx > sp.L - 2 * R || qy < 2 * R || qy > sp.W - 2 * R) continue;
+      const lb2 = Math.sqrt((A[0] - qx) ** 2 + (A[1] - qy) ** 2); if (lb2 < 0.05) continue; const vx = (A[0] - qx) / lb2, vy = (A[1] - qy) / lb2; if (-(vx * A[2] + vy * A[3]) < 0.35) continue;
+      const gx = bx - ux * 2 * R, gy = by - uy * 2 * R, ax = gx - cx, ay = gy - cy, la = Math.sqrt(ax * ax + ay * ay); if (la < 0.01) continue;
+      const cut = (ax * ux + ay * uy) / la; if (cut < 0.3) continue; if (gx < R || gx > sp.L - R || gy < R || gy > sp.W - R) continue;
+      if (segBlocked(s, cx, cy, gx, gy, R, 0, b, 1.99) || segBlocked(s, bx, by, qx, qy, R, b, -1, 1.99) || segBlocked(s, qx, qy, A[0], A[1], R, b, -1, 1.99)) continue;
+      const lb = tt + lb2; out.push({ b, k, gx, gy, ax: ax / la, ay: ay / la, la, lb: lb * 1.5, cut, pa: 0.6, q: 0.7 * cut * 0.6 / (1 + 1.1 * (la + lb)) });
+    }
+  }
   function candidates(g, who) {    // all direct pots with a clear path: {b, k, gx, gy, ax, ay, cut (cos), q}
     const s = g.s, sp = g.sp, R = sp.R, aims = pocketAims(sp), out = [], tg = K.targets(g), cx = s.x[0], cy = s.y[0];
+    const bank = g.kind === 'pb';
     for (const b of tg) {
       if (!s.on[b]) continue; const bx = s.x[b], by = s.y[b];
+      if (bank) { bankCands(g, b, aims, out); continue; }
       for (let k = 0; k < 6; k++) {
         const A = aims[k], ux0 = A[0] - bx, uy0 = A[1] - by, lb = Math.sqrt(ux0 * ux0 + uy0 * uy0); if (lb < 0.05) continue; const ux = ux0 / lb, uy = uy0 / lb;
         const pa = -(ux * A[2] + uy * A[3]); if (pa < 0.3) continue;                 // coming at the pocket too sideways
@@ -1082,7 +1149,7 @@ const NestLink = (() => {
     if (R.win === who) return 1000; if (R.win !== null && R.win !== undefined) return -1000;
     let v = 0; const snk = K.isSnk(g0.kind);
     if (R.foul.length) { v -= snk ? 3 * R.fv : 18; if (R.foul.includes('scratch')) v -= snk ? 0 : 6; }
-    else { v += snk ? 4 * R.pts : 14 * R.potted.length; }
+    else { v += snk ? 4 * R.pts : 14 * (g0.kind === 'pb' ? R.pts : R.potted.length); }
     if (g1.turn === who && !g1.over) { v += 22 * posQuality(g1); if (!R.foul.length && !R.potted.length) v -= 2; }
     else if (!g1.over) { // the turn goes over: leave the opponent little
       const gx = K.cloneGame(g1); v -= (g1.ih ? 14 : 20 * posQuality(gx)); if (R.foul.length) v -= 0; }
@@ -1108,7 +1175,7 @@ const NestLink = (() => {
     const noise = (shot, boost) => { const a = C.gauss(Rnd) * SIGMA[lvl] * (boost || 1), c = Math.cos(a), sn = Math.sin(a), dx = shot.dx * c - shot.dy * sn, dy = shot.dx * sn + shot.dy * c; return { dx, dy, p: clamp(shot.p * (1 + C.gauss(Rnd) * PSIGMA[lvl] * 0.35), 0.03, 1), a: shot.a, b: shot.b }; };
     const aimAt = (x, y) => { const dx = x - cx, dy = y - cy, l = Math.sqrt(dx * dx + dy * dy) || 1; return [dx / l, dy / l]; };
     // the break
-    if (g.k === 0 && !g.broke && (g.kind === 'p8' || g.kind === 'p9')) { const head = g.kind === 'p8' ? 1 : 1; let hb = tg[0]; for (const i of tg) if (s.x[i] < s.x[hb]) hb = i; const d = aimAt(s.x[hb], s.y[hb]); return { shot: noise({ dx: d[0], dy: d[1], p: lvl >= 3 ? 0.93 : 0.8, a: 0, b: lvl >= 3 ? -0.05 : 0 }, 0.5), place }; }
+    if (g.k === 0 && !g.broke && !K.isSnk(g.kind)) { const head = g.kind === 'p8' ? 1 : 1; let hb = tg[0]; for (const i of tg) if (s.x[i] < s.x[hb]) hb = i; const d = aimAt(s.x[hb], s.y[hb]); return { shot: noise({ dx: d[0], dy: d[1], p: lvl >= 3 ? 0.93 : 0.8, a: 0, b: lvl >= 3 ? -0.05 : 0 }, 0.5), place }; }
     if (K.isSnk(g.kind) && g.k === 0) {   // the break-off: a soft shot at the corner of the pack that has a clear line
       let best = tg[0], bd = -1; for (const i of tg) { if (segBlocked(s, cx, cy, s.x[i], s.y[i], sp.R, 0, i, 1.99)) continue; const d0 = Math.abs(s.y[i] - sp.W / 2) + 0.2 * s.x[i]; if (d0 > bd) { bd = d0; best = i; } }
       const d = aimAt(s.x[best], s.y[best]); return { shot: noise({ dx: d[0], dy: d[1], p: 0.4, a: 0, b: -0.1 }, 0.5), place }; }
@@ -1131,7 +1198,7 @@ const NestLink = (() => {
     let bestPot = opts.reduce((m, o) => (o.v > m ? o.v : m), -1e9), needSafe = !opts.length || bestPot < (K.isSnk(g.kind) ? 2 : 8);
     if (needSafe && lvl >= 3) {
       const near = tg.slice().sort((a, b) => ((s.x[a] - cx) ** 2 + (s.y[a] - cy) ** 2) - ((s.x[b] - cx) ** 2 + (s.y[b] - cy) ** 2)).slice(0, lvl >= 4 ? 4 : 2);
-      for (const b of near) for (const pw of (lvl >= 4 ? [0.2, 0.32, 0.5] : [0.3])) for (const bs of (lvl >= 4 ? [0, -0.4] : [0])) {
+      for (const b of near) for (const pw of (lvl >= 4 ? [0.2, 0.32, 0.5, 0.75] : [0.3, 0.6])) for (const bs of (lvl >= 4 ? [0, -0.4] : [0])) {
         const d = aimAt(s.x[b], s.y[b]); const sh = { dx: d[0], dy: d[1], p: pw, a: 0, b: bs }; const t = trialShot(gp, sh, who, null); yield; opts.push({ shot: sh, v: t.v - 1 });
       }
     }
@@ -2143,6 +2210,7 @@ ar: {
 (function () {
   const A = {
     he: {
+      g_p10: '10 כדורים', d_p10: 'הנמוך ראשון, ה־10 מנצח', g_pb: 'ביליארד בנקים', d_pb: 'רק כדור שפגע בדופן קודם נחשב', g_p14: '14.1 רצוף', d_p14: 'כל כדור נקודה, מירוץ ל־30', ru_p10: '<p>עשרה כדורים בצורת משולש, ה־1 בקודקוד וה־10 באמצע. תמיד פוגעים קודם בכדור הנמוך ביותר, וה־10 שנכנס חוקית מנצח. עבירה: ידיים חופשיות ליריב, שלוש עבירות ברצף מפסידות. כמו 9 כדורים, אבל קשה יותר להסתיר את הכדור האחרון.</p>', ru_pb: '<p>תשעה כדורים. רק כדור שנגע בדופן לפני שנכנס לכיס נחשב לנקודה ומשאיר אותך בתור. כדור שנכנס ישר לא נחשב ותורך נגמר. המנצח הוא הראשון שמגיע ל־5 בנקים. עבירה (לבן בכיס, החטאה או בלי דופן) נותנת ליריב ידיים חופשיות.</p>', ru_p14: '<p>כל כדור שנכנס שווה נקודה, בלי הכרזה. ראשון שמגיע ל־30 מנצח. עבירה (לבן בכיס, החטאה, או בלי דופן אחרי המגע) מורידה נקודה. כשנשאר כדור אחד על השולחן, ה־14 האחרים מוצבים מחדש במשולש והמשחק נמשך. לבן בכיס: היריב ממקם בצד הביתי.</p>', c_m_win10: 'ה־10 בכיס! ניצחון', c_m_respot10: 'ה־10 חוזר למקומו', c_m_winbank: 'בנק מנצח!', c_m_tie_bank: 'שוויון: ה־9 חוזר לשולחן', c_m_nobank: 'נכנס בלי דופן: לא נחשב', c_m_rerack14: 'מציבים 14 כדורים מחדש', c_m_win14: 'הגעת ליעד! ניצחון', c_foul_one: 'עבירה! נקודה אחת פחות ל{o}', c_race: 'מירוץ ל־{n}', c_bank_hint: 'רק בנקים נחשבים · מירוץ ל־{n}', c_left_n: 'נשארו {n} כדורים',
       c_stars_hint: '★★★ עד {a} מכות · ★★ עד {b}', 
       g_p8: '8 כדורים', d_p8: 'פשוטים מול פסים, ואז השחור', g_p9: '9 כדורים', d_p9: 'תמיד הנמוך ראשון, ה־9 מנצח',
       g_snk: 'סנוקר', d_snk: '15 אדומים, 6 צבעוניים, ברייקים', g_snk6: 'סנוקר 6 אדומים', d_snk6: 'סנוקר קצר ומהיר',
@@ -2167,6 +2235,7 @@ ar: {
       ru_snk6: '<p>כמו סנוקר, אבל עם 6 אדומים בלבד. המשחק קצר ומהיר יותר, וההתקדמות בצבעוניים זהה: צהוב 2 עד שחור 7. אותם חוקי עבירה וכדור חופשי.</p>'
     },
     en: {
+      g_p10: '10-Ball', d_p10: 'Lowest first, the 10 wins', g_pb: 'Bank Pool', d_pb: 'Only banked balls count', g_p14: 'Straight Pool 14.1', d_p14: 'A point a ball, race to 30', ru_p10: '<p>Ten balls in a triangle, the 1 at the apex and the 10 in the middle. Always hit the lowest ball first; the 10 potted legally wins. A foul gives your opponent ball in hand, and three fouls in a row lose. Like 9-ball, but the last ball is harder to hide behind.</p>', ru_pb: '<p>Nine balls. Only a ball that touched a cushion before it dropped counts as a point and keeps your turn. A straight pot does not count and your turn ends. First to 5 banks wins. A foul (cue ball potted, a miss or no cushion) gives your opponent ball in hand.</p>', ru_p14: '<p>Every ball potted is a point, no calling. First to 30 wins. A foul (cue ball potted, a miss, or no cushion after contact) costs a point. When one ball is left on the table the other 14 are racked again and play goes on. If the cue ball is potted the opponent places it behind the head string.</p>', c_m_win10: 'The 10 is down! Win', c_m_respot10: 'The 10 is spotted again', c_m_winbank: 'Bank wins!', c_m_tie_bank: 'Tied: the 9 goes back on the table', c_m_nobank: 'Straight pot: does not count', c_m_rerack14: 'Racking 14 balls again', c_m_win14: 'Target reached! Win', c_foul_one: 'Foul! One point off for {o}', c_race: 'Race to {n}', c_bank_hint: 'Only banks count · race to {n}', c_left_n: '{n} balls left',
       c_stars_hint: '★★★ within {a} shots · ★★ within {b}', 
       g_p8: '8-Ball', d_p8: 'Solids vs stripes, then the 8', g_p9: '9-Ball', d_p9: 'Lowest ball first, the 9 wins',
       g_snk: 'Snooker', d_snk: '15 reds, 6 colours, breaks', g_snk6: '6-Red Snooker', d_snk6: 'Short and quick snooker',
@@ -2191,6 +2260,7 @@ ar: {
       ru_snk6: '<p>Like snooker, but with only 6 reds. The game is shorter and quicker; the colours work the same, yellow 2 up to black 7. Same fouls and free-ball rule.</p>'
     },
     ru: {
+      g_p10: 'Десятка', d_p10: 'Сначала младший, десятка побеждает', g_pb: 'Банковый бильярд', d_pb: 'Считаются только шары от борта', g_p14: 'Свободная пирамида 14.1', d_p14: 'Очко за шар, гонка до 30', ru_p10: '<p>Десять шаров в треугольнике: единица в вершине, десятка в середине. Всегда бейте сначала по младшему шару; десятка, забитая правильно, выигрывает. Фол даёт сопернику шар в руке, три фола подряд — поражение.</p>', ru_pb: '<p>Девять шаров. Очко приносит только шар, который перед лузой коснулся борта, и ход остаётся у вас. Прямой шар не считается, ход переходит. Побеждает первый, забивший 5 шаров от борта. Фол (биток в лузе, промах или нет борта) даёт сопернику шар в руке.</p>', ru_p14: '<p>Каждый забитый шар — очко, без заявок. Побеждает первый, набравший 30. Фол (биток в лузе, промах или нет борта после касания) стоит очка. Когда на столе остаётся один шар, остальные 14 ставят заново, игра продолжается.</p>', c_m_win10: 'Десятка в лузе! Победа', c_m_respot10: 'Десятка возвращается', c_m_winbank: 'Победа от борта!', c_m_tie_bank: 'Ничья: девятка возвращается на стол', c_m_nobank: 'Прямой шар: не засчитан', c_m_rerack14: 'Ставим 14 шаров заново', c_m_win14: 'Цель достигнута! Победа', c_foul_one: 'Фол! −1 очко у {o}', c_race: 'Гонка до {n}', c_bank_hint: 'Считаются только шары от борта · до {n}', c_left_n: 'Осталось шаров: {n}',
       c_stars_hint: '★★★ за {a} ударов · ★★ за {b}', 
       g_p8: 'Восьмёрка', d_p8: 'Цельные против полосатых, потом чёрный', g_p9: 'Девятка', d_p9: 'Всегда младший шар, девятка выигрывает',
       g_snk: 'Снукер', d_snk: '15 красных, 6 цветных, серии', g_snk6: 'Снукер, 6 красных', d_snk6: 'Короткий и быстрый снукер',
@@ -2215,6 +2285,7 @@ ar: {
       ru_snk6: '<p>Как снукер, но всего с 6 красными. Партия короче и быстрее; цветные те же: жёлтый 2 … чёрный 7. Те же правила фолов и свободного шара.</p>'
     },
     es: {
+      g_p10: 'Bola 10', d_p10: 'La más baja primero, gana la 10', g_pb: 'Billar de bandas', d_pb: 'Solo cuentan las bolas con banda', g_p14: 'Billar libre 14.1', d_p14: 'Un punto por bola, carrera a 30', ru_p10: '<p>Diez bolas en triángulo, la 1 arriba y la 10 en el centro. Siempre se golpea primero la más baja; gana quien embolsa la 10 legalmente. Una falta da bola en mano al rival y tres faltas seguidas pierden.</p>', ru_pb: '<p>Nueve bolas. Solo cuenta (y mantiene el turno) la bola que tocó una banda antes de caer. Una bola directa no cuenta y pasa el turno. Gana quien llegue primero a 5 bandas. Una falta (blanca embolsada, fallo o sin banda) da bola en mano al rival.</p>', ru_p14: '<p>Cada bola embolsada vale un punto, sin cantar. Gana quien llegue a 30. Una falta (blanca embolsada, fallo o sin banda tras el contacto) resta un punto. Cuando queda una sola bola, se vuelven a colocar las otras 14 y el juego sigue.</p>', c_m_win10: '¡La 10 cae! Victoria', c_m_respot10: 'La 10 vuelve a su sitio', c_m_winbank: '¡Gana la banda!', c_m_tie_bank: 'Empate: la 9 vuelve a la mesa', c_m_nobank: 'Directa: no cuenta', c_m_rerack14: 'Se colocan 14 bolas de nuevo', c_m_win14: '¡Objetivo alcanzado! Victoria', c_foul_one: '¡Falta! −1 punto para {o}', c_race: 'Carrera a {n}', c_bank_hint: 'Solo cuentan las bandas · carrera a {n}', c_left_n: 'Quedan {n} bolas',
       c_stars_hint: '★★★ en {a} tiros · ★★ en {b}', 
       g_p8: 'Bola 8', d_p8: 'Lisas contra rayadas, luego la 8', g_p9: 'Bola 9', d_p9: 'Siempre la más baja, la 9 gana',
       g_snk: 'Snooker', d_snk: '15 rojas, 6 de color, tacadas', g_snk6: 'Snooker 6 rojas', d_snk6: 'Snooker corto y rápido',
@@ -2239,6 +2310,7 @@ ar: {
       ru_snk6: '<p>Como el snooker, pero con solo 6 rojas. La partida es más corta y rápida; los colores valen igual, amarilla 2 hasta negra 7. Mismas faltas y regla de bola libre.</p>'
     },
     ar: {
+      g_p10: '10 كرات', d_p10: 'الأقل أولاً والعاشرة تفوز', g_pb: 'بلياردو الحواف', d_pb: 'تُحسب فقط الكرة التي لمست الحافة', g_p14: '14.1 المستمر', d_p14: 'نقطة لكل كرة، سباق إلى 30', ru_p10: '<p>عشر كرات في مثلث، الأولى في الرأس والعاشرة في الوسط. اضرب دائماً أقل كرة أولاً، ومن يُدخل العاشرة بشكل قانوني يفوز. الخطأ يمنح الخصم كرة في اليد، وثلاثة أخطاء متتالية تعني الخسارة.</p>', ru_pb: '<p>تسع كرات. تُحسب نقطة فقط للكرة التي لمست الحافة قبل أن تدخل الجيب، ويبقى الدور لك. الضربة المباشرة لا تُحسب وينتهي دورك. الفائز هو أول من يصل إلى 5 ضربات حافة. الخطأ (دخول البيضاء أو الإخفاق أو عدم لمس حافة) يمنح الخصم كرة في اليد.</p>', ru_p14: '<p>كل كرة تدخل بنقطة دون إعلان. أول من يصل إلى 30 يفوز. الخطأ (دخول البيضاء أو الإخفاق أو عدم لمس حافة بعد الاصطدام) يخصم نقطة. عندما تبقى كرة واحدة تُرتَّب الـ14 الأخرى من جديد ويستمر اللعب.</p>', c_m_win10: 'العاشرة في الجيب! فوز', c_m_respot10: 'العاشرة تعود إلى مكانها', c_m_winbank: 'فوز بالحافة!', c_m_tie_bank: 'تعادل: التاسعة تعود إلى الطاولة', c_m_nobank: 'ضربة مباشرة: لا تُحسب', c_m_rerack14: 'نعيد ترتيب 14 كرة', c_m_win14: 'تم بلوغ الهدف! فوز', c_foul_one: 'خطأ! نقطة أقل لـ{o}', c_race: 'سباق إلى {n}', c_bank_hint: 'تُحسب الحواف فقط · سباق إلى {n}', c_left_n: 'تبقى {n} كرات',
       c_stars_hint: '★★★ خلال {a} ضربات · ★★ خلال {b}', 
       g_p8: 'بلياردو 8', d_p8: 'الملونة مقابل المخططة ثم الثمانية', g_p9: 'بلياردو 9', d_p9: 'دائمًا الأقل رقمًا أولًا والتسعة تفوز',
       g_snk: 'سنوكر', d_snk: '15 حمراء و6 ملونة وسلاسل', g_snk6: 'سنوكر 6 حمراء', d_snk6: 'سنوكر قصير وسريع',
@@ -2269,7 +2341,7 @@ ar: {
 /* ===== src/app.js ===== */
 'use strict';
 /* CueNest — מעטפת: שפות, אחסון, ניווט, מסכים, אונליין (NestLink). המשחקים נרשמים ב-Games. */
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.1.0';
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const store = {
@@ -2720,7 +2792,7 @@ const CueView = (function () {
    The shot that travels between phones is the raw {dx,dy,p,a,b} plus where the cue ball was placed; both phones run the same steps. */
 (function () {
   const C = Cue, K = CueRules, B = CueBot, V = CueView;
-  const LV = { p8: CueLevels.make('p8'), p9: CueLevels.make('p9'), snk: CueLevels.make('snk'), snk6: [] };
+  const LV = { p8: CueLevels.make('p8'), p9: CueLevels.make('p9'), snk: CueLevels.make('snk'), snk6: [], p10: [], pb: [], p14: [] };
   const STEPS_MAX = 18, TAU = Math.PI * 2;
   const wrap = a => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
   const clamp = C.clamp;
@@ -2943,8 +3015,8 @@ const CueView = (function () {
       if (this.lv) { if (R.potted && R.potted.length) this.banner('+' + R.pts, 'good'); else this.banner(T('c_miss'), ''); if (R.foul.length && !R.potted.length) Snd.foul(); return; }
       if (R.foul.length) {
         const w = R.foul.map(f => T('c_f_' + f)).join(' · '); Snd.foul();
-        this.banner(snk ? T('c_foul_pts', { n: R.fv, o: nm }) : T('c_foul_ih', { o: nm }), 'foul', w);
-      } else if (R.pts > 0 && snk) this.banner(T('c_pts', { n: R.pts }), 'good');
+        this.banner(snk ? T('c_foul_pts', { n: R.fv, o: nm }) : g.kind === 'p14' ? T('c_foul_one', { o: nm }) : T('c_foul_ih', { o: nm }), 'foul', w);
+      } else if (R.pts > 0 && (snk || g.kind === 'pb' || g.kind === 'p14')) this.banner(T('c_pts', { n: R.pts }), 'good');
       else if (R.potted.length) this.banner(T('c_pot'), 'good');
       else if (R.keep === false && !g.over && this.mode !== 'two') this.banner(T('c_miss'), '');
       for (const m of R.msg) this.banner(T('c_m_' + m), 'info');
@@ -2988,7 +3060,7 @@ const CueView = (function () {
     /* ---------- finish ---------- */
     finish(end) {
       if (this.state === 'fin') return; this.state = 'fin'; const m = this.mode, st = pg(this.kind), g = this.g; let html = '', btns = '';
-      const sc = K.isSnk(g.kind) ? `<p>${T('c_final', { a: g.sc[0], b: g.sc[1] })}</p>` : '';
+      const sc = (K.isSnk(g.kind) || g.kind === 'pb' || g.kind === 'p14') ? `<p>${T('c_final', { a: g.sc[0], b: g.sc[1] })}</p>` : '';
       if (m === 'solo') {
         const win = !!end.win, n = this.lv.n;
         if (win) {
@@ -3082,7 +3154,8 @@ const CueView = (function () {
           for (let i = 0; i < 2; i++) {
             let sub = '', chips = '', big = '';
             if (g.kind === 'p8') { if (g.open) sub = T('c_open'); else { const grp = g.grp[i]; sub = T(grp === 's' ? 'c_solids' : 'c_stripes'); const mine = K.ballsOf(g, grp); chips = mine.map(b => this.chip(b, !g.s.on[b])).join('') + (mine.every(b => !g.s.on[b]) ? this.chip(8, !g.s.on[8]) : ''); } }
-            else if (g.kind === 'p9') { sub = g.fouls[i] ? '⚠'.repeat(g.fouls[i]) : ''; }
+            else if (g.kind === 'p9' || g.kind === 'p10') { sub = g.fouls[i] ? '⚠'.repeat(g.fouls[i]) : ''; }
+            else if (g.kind === 'pb' || g.kind === 'p14') { big = g.sc[i]; sub = T('c_race', { n: g.race }); }
             else { big = g.sc[i]; sub = g.turn === i && g.brk ? T('c_brk', { n: g.brk }) : ''; }
             h += `<div class="pc ${g.turn === i && !g.over ? 'on' : ''}"><span class="av">${this.avOf(i)}</span><div class="in"><b>${esc(this.nameOf(i))}</b><div class="sub">${sub}</div>${chips ? `<div class="chips">${chips}</div>` : ''}</div>${big !== '' ? `<span class="big">${big}</span>` : ''}</div>`;
           }
@@ -3091,7 +3164,7 @@ const CueView = (function () {
       }
       // the shared nine-ball row
       const row = $('[data-row]', el); let rs = '';
-      if (g.kind === 'p9') { const low = st.low; for (let i = 1; i <= 9; i++) rs += this.chip(i, !g.s.on[i], i === low ? 'hi' : ''); }
+      if (g.kind === 'p9' || g.kind === 'p10') { const low = st.low; for (let i = 1; i <= g.top; i++) rs += this.chip(i, !g.s.on[i], i === low ? 'hi' : ''); }
       if (rs !== this.rowSig) { this.rowSig = rs; row.innerHTML = rs; row.style.display = rs ? '' : 'none'; }
       // status line
       let txt = '';
@@ -3102,7 +3175,9 @@ const CueView = (function () {
       else if (this.mode === 'two') txt = T('c_turn', { n: this.nameOf(g.turn) });
       else if (snk && !this.lv) txt = (g.free ? T('c_freeball') + ' · ' : '') + (g.phase === 'red' ? T('c_on_red') : g.phase === 'colour' ? T('c_on_colour') : T('c_on_col', { c: T('c_col_' + g.nextCol) }));
       else if (this.lv) txt = T('c_stars_hint', { a: this.lv.s3, b: this.lv.s2 });
-      else if (g.kind === 'p9') txt = T('c_low', { n: st.low });
+      else if (g.kind === 'p9' || g.kind === 'p10') txt = T('c_low', { n: st.low });
+      else if (g.kind === 'pb') txt = T('c_bank_hint', { n: g.race });
+      else if (g.kind === 'p14') txt = T('c_left_n', { n: st.left });
       else if (g.kind === 'p8' && g.open && !this.lv) txt = T('c_open');
       else txt = this.lv ? T('c_stars_hint', { a: this.lv.s3, b: this.lv.s2 }) : T('c_your');
       if (txt !== this.statusSig) { this.statusSig = txt; $('[data-status]', el).textContent = txt; }
@@ -3206,14 +3281,17 @@ const CueView = (function () {
     const balls = {
       p8: [['#f2c230', 52, 35], ['#1f4fb8', 59, 31], ['#101114', 59, 39], ['#d8322b', 66, 35], ['#ee7a1c', 66, 27]],
       p9: [['#f2c230', 52, 35], ['#1f4fb8', 59, 31], ['#d8322b', 59, 39], ['#5a2a8c', 66, 35], ['#e8d9a0', 66, 27]],
+      p10: [['#f2c230', 52, 35], ['#1f4fb8', 59, 31], ['#d8322b', 59, 39], ['#168a4a', 66, 35], ['#1f4fb8', 66, 27]],
+      pb: [['#d8322b', 50, 22], ['#f2c230', 62, 40], ['#1f4fb8', 40, 50]],
+      p14: [['#d8322b', 52, 35], ['#f2c230', 59, 31], ['#1f4fb8', 59, 39], ['#ee7a1c', 66, 27], ['#168a4a', 66, 35], ['#5a2a8c', 66, 43]],
       snk: [['#c8201c', 54, 31], ['#c8201c', 54, 39], ['#c8201c', 60, 35], ['#f1d12a', 20, 28], ['#2d62d0', 45, 35]],
       snk6: [['#c8201c', 56, 33], ['#c8201c', 56, 37], ['#ee8aa8', 49, 35], ['#0e0f12', 74, 35], ['#1f9a52', 20, 42]]
     }[kind] || [];
     return `<svg viewBox="0 0 90 70" width="90" height="70">${ART.pool}${balls.map(b => `<circle cx="${b[1]}" cy="${b[2]}" r="3.2" fill="${b[0]}"/>`).join('')}<circle cx="28" cy="35" r="3.2" fill="#f4f1e8"/></svg>`;
   }
-  ['p8', 'p9', 'snk', 'snk6'].forEach(kind => {
+  ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'].forEach(kind => {
     Games[kind] = {
-      ready: true, modes: kind === 'snk6' ? ['cpu', 'two', 'online'] : ['solo', 'cpu', 'two', 'online'], levels: LV[kind],
+      ready: true, modes: !LV[kind].length ? ['cpu', 'two', 'online'] : ['solo', 'cpu', 'two', 'online'], levels: LV[kind],
       art() { return artFor(kind); },
       startSolo(n) { launch({ kind, mode: 'solo', lv: LV[kind][n - 1], seed: LV[kind][n - 1].seed }); },
       startCpu(lv) { launch({ kind, mode: 'cpu', lv, seed: seedNow() }); },
@@ -3228,7 +3306,7 @@ const CueView = (function () {
 /* ===== src/shell2.js ===== */
 'use strict';
 /* CueNest — מעטפת AppNest מלאה: בית, אתגר יומי, מדבקות, חוקים, הישגים, הגדרות, גיבוי, אודות, מדריך. */
-const GAME_IDS = ['p8', 'p9', 'snk', 'snk6'], LGAMES = ['p8', 'p9', 'snk'], GICON = { p8: '🎱', p9: '🟡', snk: '🔴', snk6: '🟤' };
+const GAME_IDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'], LGAMES = ['p8', 'p9', 'snk'], GICON = { p8: '🎱', p9: '🟡', snk: '🔴', snk6: '🟤', p10: '🔟', pb: '↗️', p14: '🔺' };
 const STICKERS = [...LGAMES.map(g => ['first_' + g, GICON[g]]), ['stars10', '⭐'], ['stars50', '🌟'], ['stars150', '🏆'], ['three', '✨'], ['cpu', '🤖'], ['two', '👥'], ['online', '🌐'], ['daily1', '📅'], ['streak3', '🔥'], ['streak7', '☄️']];
 (function () { // מדבקת "שלב ראשון" לכל משחק — טקסטים נבנים משם המשחק בכל שפה (אלא אם כבר קיימים)
   const P = { he: ['שלב ראשון: ', 'סיימו שלב ראשון ב־'], en: ['First level: ', 'Finish a first level in '], ru: ['Первый уровень: ', 'Пройдите первый уровень в '], es: ['Primer nivel: ', 'Supera un primer nivel en '], ar: ['أول مرحلة: ', 'أنهِ أول مرحلة في '] };
