@@ -22,7 +22,7 @@
 /* CueNest service worker — network-first for pages (never a bare error), cache-first for files */
 const VERSION = 'cuenest-1.0.0';
 const CORE = ['./', 'manifest.json', 'icon-192.png', 'icon-512.png', 'privacy_policy.html'];
-const ART = ["art/snk-cue.webp","art/snk-felt.webp","art/snk-wood.webp"];
+const ART = ["art/snk-cue.webp","art/snk-felt.webp","art/snk-wood.webp","art/tile-p8.webp","art/tile-p9.webp","art/tile-snk.webp","art/tile-snk6.webp"];
 const ROOT = new URL('./', self.registration.scope).pathname;
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => Promise.allSettled(CORE.concat(ART).map(u => c.add(u)))).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
