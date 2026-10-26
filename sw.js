@@ -20,7 +20,7 @@
 })();
 
 /* CueNest service worker — network-first for pages (never a bare error), cache-first for files */
-const VERSION = 'cuenest-1.1.1';
+const VERSION = 'cuenest-1.2.0';
 const CORE = ['./', 'manifest.json', 'icon-192.png', 'icon-512.png', 'privacy_policy.html'];
 const ART = ["art/snk-cue.webp","art/snk-felt.webp","art/snk-wood.webp","art/tile-p10.webp","art/tile-p14.webp","art/tile-p8.webp","art/tile-p9.webp","art/tile-pb.webp","art/tile-snk.webp","art/tile-snk6.webp"];
 const ROOT = new URL('./', self.registration.scope).pathname;

@@ -540,6 +540,7 @@ const NestLink = (() => {
   /* ---------- tables ---------- */
   const SPECS = {
     pool: { kind: 'pool', L: 2.54, W: 1.27, R: 0.028575, cc: 0.0831, sm: 0.0667, rj: 0.005, aR: 0.13, vmax: 11, nPocket: 6 },
+    carom: { kind: 'carom', L: 2.84, W: 1.42, R: 0.03075, cc: 0, sm: 0, rj: 0.005, aR: 0.12, vmax: 9, nPocket: 0 },
     snooker: { kind: 'snooker', L: 3.5685, W: 1.778, R: 0.02625, cc: 0.0632, sm: 0.0508, rj: 0.0035, aR: 0.17, vmax: 9.5, nPocket: 6 }
   };
   function table(kind) {
@@ -552,6 +553,7 @@ const NestLink = (() => {
     ];
     o.tips = [[cc, 0], [hx - sm, 0], [hx + sm, 0], [L - cc, 0], [cc, W], [hx - sm, W], [hx + sm, W], [L - cc, W], [0, cc], [0, W - cc], [L, cc], [L, W - cc]];
     o.pk = [[0, 0], [hx, 0], [L, 0], [0, W], [hx, W], [L, W]];   // pocket anchors (ids 0..5)
+    if (o.nPocket === 0) { o.tips = []; o.pk = []; }                   // carom: no pockets, no jaws
     o.pr = 0.5 * R;                                                // a ball whose centre goes closer than this to the outer line is gone
     o.cdepth = 0.7 * R;
     return o;
@@ -741,8 +743,8 @@ const NestLink = (() => {
   const C = typeof module !== 'undefined' && module.exports ? require('./cue.js') : root.Cue;
   const clamp = C.clamp, prng = C.prng;
   const SQ3 = Math.sqrt(3);
-  const KINDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'];
-  const TOP = { p9: 9, p10: 10 }, RACE = { pb: 5, p14: 30 };   // number games: the ball that wins; race games: points to win
+  const KINDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'c3', 'snk', 'snk6'];
+  const TOP = { p9: 9, p10: 10 }, RACE = { pb: 5, p14: 30, c3: 10 };   // number games: the ball that wins; race games: points to win
   const isSnk = k => k === 'snk' || k === 'snk6';
 
   /* ---------- ball look (for the UI) ---------- */
@@ -750,8 +752,10 @@ const NestLink = (() => {
   const SNK_COL = { red: '#c8201c', 16: '#f1d12a', 17: '#1f9a52', 18: '#7a4a22', 19: '#2d62d0', 20: '#ee8aa8', 21: '#0e0f12' };
   function look(g, i) {   // the look of ball i in this game (solo challenges carry their own values)
     if (g.kind === 'prac') { if (i === 0) return ballLook('p8', 0); const b = g.lv.balls[i - 1]; return g.lv.table === 'snooker' ? ballLook('snk', b.v === 1 ? 1 : b.v + 14) : ballLook('p8', ((i - 1) % 15) + 1); }
+    if (g.kind === 'c3') return c3Look(g.turn, i);
     return ballLook(g.kind, i);
   }
+  function c3Look(turn, i) { const white = i === 2 ? false : (i === 0) === (turn === 0); return i === 2 ? { col: '#c8201c', num: 0, stripe: false } : white ? { col: '#f4f1e8', num: 0, stripe: false, cue: true } : { col: '#f1d12a', num: 0, stripe: false }; }
   function ballLook(kind, i) {
     if (i === 0) return { col: '#f4f1e8', num: 0, stripe: false, cue: true };
     if (isSnk(kind)) return i <= 15 ? { col: SNK_COL.red, num: 0, stripe: false } : { col: SNK_COL[i], num: 0, stripe: false };
@@ -817,6 +821,11 @@ const NestLink = (() => {
   function newGame(kind, seed, opts) {
     opts = opts || {}; seed = seed || 1;
     if (kind === 'prac') { const lv = opts.lv, sp = C.table(lv.table), balls = [{ x: lv.cue[0], y: lv.cue[1] }].concat(lv.balls.map(b => ({ x: b.x, y: b.y }))), s = C.make(sp, balls); return { kind, sp, s, seed, turn: 0, k: 0, ih: null, over: false, winner: null, log: [], fouls: [0, 0], sc: [0, 0], opts, lv, shots: 0 }; }
+    if (kind === 'c3') {
+      const sp = C.table('carom'), W0 = [sp.L * 0.25, sp.W / 2 - 0.2], Y0 = [sp.L * 0.25, sp.W / 2], first = opts.first || 0, a = first ? Y0 : W0, b = first ? W0 : Y0;
+      const s = C.make(sp, [{ x: a[0], y: a[1] }, { x: b[0], y: b[1] }, { x: sp.L * 0.75, y: sp.W / 2 }]);
+      return { kind, sp, s, seed, turn: first, k: 0, ih: null, over: false, winner: null, log: [], fouls: [0, 0], sc: [0, 0], opts, race: RACE.c3, broke: true };
+    }
     const sp = C.table(isSnk(kind) ? 'snooker' : 'pool');
     const balls = isSnk(kind) ? rackSnooker(sp, kind === 'snk6' ? 6 : 15) : rackPool(sp, kind, seed), s = C.make(sp, balls);
     const g = { kind, sp, s, seed, turn: opts.first || 0, k: 0, ih: null, over: false, winner: null, log: [], fouls: [0, 0], sc: [0, 0], opts };
@@ -866,6 +875,7 @@ const NestLink = (() => {
     if (g.kind === 'p8') return p8Targets(g, g.turn);
     if (g.kind === 'p9' || g.kind === 'p10') return p9Targets(g);
     if (g.kind === 'pb' || g.kind === 'p14') return anyTargets(g);
+    if (g.kind === 'c3') return [1, 2];
     const on = snkOn(g); if (g.free) { const o = []; for (let i = 1; i <= 21; i++) if (g.s.on[i]) o.push(i); return o; } return on;
   }
   function snookered(g) {   // can the cue ball (where it lies) not hit ANY ball that is on, along a free straight line to its visible side?
@@ -978,6 +988,20 @@ const NestLink = (() => {
     R.nextIH = g.ih; return R;
   }
 
+  /* ---------- settle: three-cushion carom (the shooter's ball is always slot 0; slots 0 and 1 swap when the turn passes) ---------- */
+  function settle3(g, ev, pre) {
+    const s = g.s, who = g.turn, opp = 1 - who, R = { who, foul: [], pts: 0, potted: [], keep: false, win: null, msg: [] };
+    const seen = {}; let t2 = -1; for (const c of ev.col) { if (c.i !== 0 && c.j !== 0) continue; const b = c.i === 0 ? c.j : c.i; if (b !== 1 && b !== 2) continue; if (seen[b] === undefined) { seen[b] = c.t; if (Object.keys(seen).length === 2) t2 = c.t; } }
+    const both = t2 >= 0; let cush = 0; if (both) for (const c of ev.cus) if (c.i === 0 && c.t < t2) cush++;
+    R.cush = cush; R.fv = 0;
+    if (both && cush >= 3) { R.pts = 1; g.sc[who]++; R.keep = true; }
+    else R.msg.push(both ? 'c3few' : 'c3one');
+    if (g.sc[who] >= g.race) { R.win = who; R.msg.push('win3'); }
+    if (R.win === null && !R.keep) { g.turn = opp; R.swap = true; swapSlots(g); }
+    if (R.win !== null) { g.over = true; g.winner = R.win; }
+    R.nextIH = null; return R;
+  }
+  function swapSlots(g) { const s = g.s; for (const k of ['x', 'y']) { const t = s[k][0]; s[k][0] = s[k][1]; s[k][1] = t; } }
   /* ---------- settle: snooker ---------- */
   function snkFinish(g, R) {
     const a = g.sc[0], b = g.sc[1];
@@ -1054,7 +1078,7 @@ const NestLink = (() => {
   }
   function settle(g, ev, p) {
     p = p || pre(g); let R;
-    if (g.kind === 'prac') R = settlePrac(g, ev, p); else if (g.kind === 'p8') R = settle8(g, ev, p); else if (g.kind === 'p9' || g.kind === 'p10') R = settle9(g, ev, p); else if (g.kind === 'pb') R = settleBank(g, ev, p); else if (g.kind === 'p14') R = settle141(g, ev, p); else R = settleSnk(g, ev, p);
+    if (g.kind === 'prac') R = settlePrac(g, ev, p); else if (g.kind === 'p8') R = settle8(g, ev, p); else if (g.kind === 'p9' || g.kind === 'p10') R = settle9(g, ev, p); else if (g.kind === 'pb') R = settleBank(g, ev, p); else if (g.kind === 'p14') R = settle141(g, ev, p); else if (g.kind === 'c3') R = settle3(g, ev, p); else R = settleSnk(g, ev, p);
     g.k++; R.k = g.k; if (g.kind !== 'prac') {} g.log.push({ who: R.who, foul: R.foul.slice(), potted: R.potted.slice(), pts: R.pts });
     if (g.s.on[0] === 0) { g.s.on[0] = 1; const d = defaultCue(g); g.s.x[0] = d[0]; g.s.y[0] = d[1]; }
     return R;
@@ -1074,6 +1098,7 @@ const NestLink = (() => {
     const o = { turn: g.turn, over: g.over, winner: g.winner, ih: g.ih };
     if (g.kind === 'p8') { o.grp = g.grp.slice(); o.open = g.open; o.left = [0, 0]; if (!g.open) for (let w = 0; w < 2; w++) o.left[w] = ballsOf(g, g.grp[w]).filter(i => g.s.on[i]).length; }
     if (g.kind === 'p9' || g.kind === 'p10') o.low = p9Targets(g)[0] || 0;
+    if (g.kind === 'c3') { o.sc = g.sc.slice(); o.race = g.race; }
     if (g.kind === 'pb' || g.kind === 'p14') { o.sc = g.sc.slice(); o.race = g.race; let n = 0; for (let i = 1; i <= 15; i++) if (g.s.on[i]) n++; o.left = n; }
     if (isSnk(g.kind)) { o.sc = g.sc.slice(); o.phase = g.phase; o.reds = g.reds; o.next = g.nextCol; o.free = g.free; o.brk = g.brk; o.rem = remainingPoints(g); }
     return o;
@@ -1168,7 +1193,27 @@ const NestLink = (() => {
     for (const p of tries) { g1.s.x[0] = p[0]; g1.s.y[0] = p[1]; g1.s.on[0] = 1; const c = candidates(g1); const q = c.length ? c[0].q + 0.3 * (c.length > 1 ? c[1].q : 0) : 0; if (q > bq) { bq = q; best = p; } }
     return best;
   }
+  function* c3Plan(g, lvl, Rnd) {     // carom: try many directions / powers / spins on a copy and keep the shots that score
+    const who = g.turn, s = g.s, cx = s.x[0], cy = s.y[0], gp = g;
+    const noise = shot => { const a = C.gauss(Rnd) * SIGMA[lvl], c = Math.cos(a), sn = Math.sin(a); return { dx: shot.dx * c - shot.dy * sn, dy: shot.dx * sn + shot.dy * c, p: clamp(shot.p * (1 + C.gauss(Rnd) * PSIGMA[lvl] * 0.35), 0.05, 1), a: shot.a, b: shot.b }; };
+    const dir = a => ({ dx: Math.cos(a), dy: Math.sin(a) });
+    if (lvl === 1) { const d = dir(Rnd() * 6.2832); yield; return { shot: noise({ dx: d.dx, dy: d.dy, p: 0.35 + 0.4 * Rnd(), a: 0, b: 0 }), place: null }; }
+    const nd = lvl === 2 ? 36 : lvl === 3 ? 72 : 90, pw = lvl === 2 ? [0.55] : lvl === 3 ? [0.4, 0.7] : [0.35, 0.6, 0.9], sp = lvl >= 4 ? [[0, 0], [0.4, 0], [-0.4, 0], [0, 0.35]] : [[0, 0]];
+    const off = Rnd() * 6.2832, opts = [];
+    const score = R => (R.pts ? 100 : (R.cush >= 0 && R.msg.includes('c3few') ? 12 + 4 * Math.min(2, R.cush) : 0));
+    for (let i = 0; i < nd; i++) for (const p of pw) for (const q of sp) {
+      const d = dir(off + 6.2832 * i / nd), sh = { dx: d.dx, dy: d.dy, p, a: q[0], b: q[1] }, g1 = K.cloneGame(gp), R = K.shoot(g1, sh, null); yield;
+      opts.push({ shot: sh, v: score(R) + (R.pts ? 6 * (1 - p) : 0) + Rnd() });
+    }
+    opts.sort((a, b) => b.v - a.v);
+    if (lvl >= 4) for (let k = 0; k < Math.min(3, opts.length); k++) if (opts[k].v >= 100) {   // prefer a scoring shot that survives a small aiming error
+      const sh = opts[k].shot; let ok = 0; for (const da of [-0.003, 0.003]) { const cs = Math.cos(da), sn = Math.sin(da), g1 = K.cloneGame(gp), R = K.shoot(g1, { dx: sh.dx * cs - sh.dy * sn, dy: sh.dx * sn + sh.dy * cs, p: sh.p, a: sh.a, b: sh.b }, null); yield; if (R.pts) ok++; } opts[k].v += 20 * ok;
+    }
+    opts.sort((a, b) => b.v - a.v); const pickIdx = lvl === 2 ? (Rnd() * Math.min(3, opts.length)) | 0 : 0;
+    return { shot: noise(opts[pickIdx].shot), place: null };
+  }
   function* botPlan(g, lvl, Rnd) {      // yields progress; the generator's return value is {shot, place}
+    if (g.kind === 'c3') return yield* c3Plan(g, lvl, Rnd);
     const who = g.turn, sp = g.sp, place = g.ih ? placeBest(g, who) : null, gp = K.cloneGame(g);
     if (gp.ih && place) { gp.s.x[0] = place[0]; gp.s.y[0] = place[1]; gp.s.on[0] = 1; gp.ih = null; }
     const s = gp.s, cx = s.x[0], cy = s.y[0], tg = K.targets(gp).filter(i => s.on[i]);
@@ -2210,6 +2255,7 @@ ar: {
 (function () {
   const A = {
     he: {
+      g_c3: 'שלוש דפנות', d_c3: 'קראם: שלוש דפנות לפני הכדור השני', ru_c3: '<p>שולחן בלי כיסים ושלושה כדורים: הלבן, הצהוב והאדום. כל שחקן משחק עם כדור אחד (לבן או צהוב). נקודה מקבלים כשהכדור שלך פוגע בשני הכדורים האחרים, ולפני הפגיעה בכדור השני הוא נגע בשלוש דפנות לפחות. נקודה משאירה אותך בתור, החטאה מעבירה את התור. המנצח הוא הראשון שמגיע ל־10 נקודות.</p>', c_m_c3few: 'פחות משלוש דפנות', c_m_c3one: 'לא פגע בשני הכדורים', c_m_win3: 'הגעת ליעד! ניצחון', c_c3_hint: 'פוגעים בשני הכדורים, אחרי שלוש דפנות לפחות',
       g_p10: '10 כדורים', d_p10: 'הנמוך ראשון, ה־10 מנצח', g_pb: 'ביליארד בנקים', d_pb: 'רק כדור שפגע בדופן קודם נחשב', g_p14: '14.1 רצוף', d_p14: 'כל כדור נקודה, מירוץ ל־30', ru_p10: '<p>עשרה כדורים בצורת משולש, ה־1 בקודקוד וה־10 באמצע. תמיד פוגעים קודם בכדור הנמוך ביותר, וה־10 שנכנס חוקית מנצח. עבירה: ידיים חופשיות ליריב, שלוש עבירות ברצף מפסידות. כמו 9 כדורים, אבל קשה יותר להסתיר את הכדור האחרון.</p>', ru_pb: '<p>תשעה כדורים. רק כדור שנגע בדופן לפני שנכנס לכיס נחשב לנקודה ומשאיר אותך בתור. כדור שנכנס ישר לא נחשב ותורך נגמר. המנצח הוא הראשון שמגיע ל־5 בנקים. עבירה (לבן בכיס, החטאה או בלי דופן) נותנת ליריב ידיים חופשיות.</p>', ru_p14: '<p>כל כדור שנכנס שווה נקודה, בלי הכרזה. ראשון שמגיע ל־30 מנצח. עבירה (לבן בכיס, החטאה, או בלי דופן אחרי המגע) מורידה נקודה. כשנשאר כדור אחד על השולחן, ה־14 האחרים מוצבים מחדש במשולש והמשחק נמשך. לבן בכיס: היריב ממקם בצד הביתי.</p>', c_m_win10: 'ה־10 בכיס! ניצחון', c_m_respot10: 'ה־10 חוזר למקומו', c_m_winbank: 'בנק מנצח!', c_m_tie_bank: 'שוויון: ה־9 חוזר לשולחן', c_m_nobank: 'נכנס בלי דופן: לא נחשב', c_m_rerack14: 'מציבים 14 כדורים מחדש', c_m_win14: 'הגעת ליעד! ניצחון', c_foul_one: 'עבירה! נקודה אחת פחות ל{o}', c_race: 'מירוץ ל־{n}', c_bank_hint: 'רק בנקים נחשבים · מירוץ ל־{n}', c_left_n: 'נשארו {n} כדורים',
       c_stars_hint: '★★★ עד {a} מכות · ★★ עד {b}', 
       g_p8: '8 כדורים', d_p8: 'פשוטים מול פסים, ואז השחור', g_p9: '9 כדורים', d_p9: 'תמיד הנמוך ראשון, ה־9 מנצח',
@@ -2235,6 +2281,7 @@ ar: {
       ru_snk6: '<p>כמו סנוקר, אבל עם 6 אדומים בלבד. המשחק קצר ומהיר יותר, וההתקדמות בצבעוניים זהה: צהוב 2 עד שחור 7. אותם חוקי עבירה וכדור חופשי.</p>'
     },
     en: {
+      g_c3: 'Three-Cushion', d_c3: 'Carom: three cushions before the second ball', ru_c3: '<p>A table with no pockets and three balls: white, yellow and red. Each player has one cue ball (white or yellow). You score when your ball hits both other balls and has touched at least three cushions before it hits the second one. A point keeps your turn, a miss passes it. First to 10 points wins.</p>', c_m_c3few: 'Fewer than three cushions', c_m_c3one: 'Did not hit both balls', c_m_win3: 'Target reached! Win', c_c3_hint: 'Hit both balls, after at least three cushions',
       g_p10: '10-Ball', d_p10: 'Lowest first, the 10 wins', g_pb: 'Bank Pool', d_pb: 'Only banked balls count', g_p14: 'Straight Pool 14.1', d_p14: 'A point a ball, race to 30', ru_p10: '<p>Ten balls in a triangle, the 1 at the apex and the 10 in the middle. Always hit the lowest ball first; the 10 potted legally wins. A foul gives your opponent ball in hand, and three fouls in a row lose. Like 9-ball, but the last ball is harder to hide behind.</p>', ru_pb: '<p>Nine balls. Only a ball that touched a cushion before it dropped counts as a point and keeps your turn. A straight pot does not count and your turn ends. First to 5 banks wins. A foul (cue ball potted, a miss or no cushion) gives your opponent ball in hand.</p>', ru_p14: '<p>Every ball potted is a point, no calling. First to 30 wins. A foul (cue ball potted, a miss, or no cushion after contact) costs a point. When one ball is left on the table the other 14 are racked again and play goes on. If the cue ball is potted the opponent places it behind the head string.</p>', c_m_win10: 'The 10 is down! Win', c_m_respot10: 'The 10 is spotted again', c_m_winbank: 'Bank wins!', c_m_tie_bank: 'Tied: the 9 goes back on the table', c_m_nobank: 'Straight pot: does not count', c_m_rerack14: 'Racking 14 balls again', c_m_win14: 'Target reached! Win', c_foul_one: 'Foul! One point off for {o}', c_race: 'Race to {n}', c_bank_hint: 'Only banks count · race to {n}', c_left_n: '{n} balls left',
       c_stars_hint: '★★★ within {a} shots · ★★ within {b}', 
       g_p8: '8-Ball', d_p8: 'Solids vs stripes, then the 8', g_p9: '9-Ball', d_p9: 'Lowest ball first, the 9 wins',
@@ -2260,6 +2307,7 @@ ar: {
       ru_snk6: '<p>Like snooker, but with only 6 reds. The game is shorter and quicker; the colours work the same, yellow 2 up to black 7. Same fouls and free-ball rule.</p>'
     },
     ru: {
+      g_c3: 'Три борта', d_c3: 'Карамболь: три борта до второго шара', ru_c3: '<p>Стол без луз и три шара: белый, жёлтый и красный. У каждого игрока свой биток (белый или жёлтый). Очко даётся, когда ваш шар касается двух других шаров, а до касания второго успел коснуться не менее трёх бортов. После очка ход остаётся у вас, после промаха переходит. Побеждает первый, набравший 10 очков.</p>', c_m_c3few: 'Меньше трёх бортов', c_m_c3one: 'Не задел оба шара', c_m_win3: 'Цель достигнута! Победа', c_c3_hint: 'Заденьте оба шара после трёх бортов или больше',
       g_p10: 'Десятка', d_p10: 'Сначала младший, десятка побеждает', g_pb: 'Банковый бильярд', d_pb: 'Считаются только шары от борта', g_p14: 'Свободная пирамида 14.1', d_p14: 'Очко за шар, гонка до 30', ru_p10: '<p>Десять шаров в треугольнике: единица в вершине, десятка в середине. Всегда бейте сначала по младшему шару; десятка, забитая правильно, выигрывает. Фол даёт сопернику шар в руке, три фола подряд — поражение.</p>', ru_pb: '<p>Девять шаров. Очко приносит только шар, который перед лузой коснулся борта, и ход остаётся у вас. Прямой шар не считается, ход переходит. Побеждает первый, забивший 5 шаров от борта. Фол (биток в лузе, промах или нет борта) даёт сопернику шар в руке.</p>', ru_p14: '<p>Каждый забитый шар — очко, без заявок. Побеждает первый, набравший 30. Фол (биток в лузе, промах или нет борта после касания) стоит очка. Когда на столе остаётся один шар, остальные 14 ставят заново, игра продолжается.</p>', c_m_win10: 'Десятка в лузе! Победа', c_m_respot10: 'Десятка возвращается', c_m_winbank: 'Победа от борта!', c_m_tie_bank: 'Ничья: девятка возвращается на стол', c_m_nobank: 'Прямой шар: не засчитан', c_m_rerack14: 'Ставим 14 шаров заново', c_m_win14: 'Цель достигнута! Победа', c_foul_one: 'Фол! −1 очко у {o}', c_race: 'Гонка до {n}', c_bank_hint: 'Считаются только шары от борта · до {n}', c_left_n: 'Осталось шаров: {n}',
       c_stars_hint: '★★★ за {a} ударов · ★★ за {b}', 
       g_p8: 'Восьмёрка', d_p8: 'Цельные против полосатых, потом чёрный', g_p9: 'Девятка', d_p9: 'Всегда младший шар, девятка выигрывает',
@@ -2285,6 +2333,7 @@ ar: {
       ru_snk6: '<p>Как снукер, но всего с 6 красными. Партия короче и быстрее; цветные те же: жёлтый 2 … чёрный 7. Те же правила фолов и свободного шара.</p>'
     },
     es: {
+      g_c3: 'Tres bandas', d_c3: 'Carambola: tres bandas antes de la segunda bola', ru_c3: '<p>Una mesa sin troneras y tres bolas: blanca, amarilla y roja. Cada jugador tiene una bola (blanca o amarilla). Se anota cuando tu bola toca las otras dos y antes de tocar la segunda ha tocado al menos tres bandas. Un punto mantiene el turno, un fallo lo pasa. Gana quien llegue primero a 10 puntos.</p>', c_m_c3few: 'Menos de tres bandas', c_m_c3one: 'No tocó las dos bolas', c_m_win3: '¡Objetivo alcanzado! Victoria', c_c3_hint: 'Toca las dos bolas tras al menos tres bandas',
       g_p10: 'Bola 10', d_p10: 'La más baja primero, gana la 10', g_pb: 'Billar de bandas', d_pb: 'Solo cuentan las bolas con banda', g_p14: 'Billar libre 14.1', d_p14: 'Un punto por bola, carrera a 30', ru_p10: '<p>Diez bolas en triángulo, la 1 arriba y la 10 en el centro. Siempre se golpea primero la más baja; gana quien embolsa la 10 legalmente. Una falta da bola en mano al rival y tres faltas seguidas pierden.</p>', ru_pb: '<p>Nueve bolas. Solo cuenta (y mantiene el turno) la bola que tocó una banda antes de caer. Una bola directa no cuenta y pasa el turno. Gana quien llegue primero a 5 bandas. Una falta (blanca embolsada, fallo o sin banda) da bola en mano al rival.</p>', ru_p14: '<p>Cada bola embolsada vale un punto, sin cantar. Gana quien llegue a 30. Una falta (blanca embolsada, fallo o sin banda tras el contacto) resta un punto. Cuando queda una sola bola, se vuelven a colocar las otras 14 y el juego sigue.</p>', c_m_win10: '¡La 10 cae! Victoria', c_m_respot10: 'La 10 vuelve a su sitio', c_m_winbank: '¡Gana la banda!', c_m_tie_bank: 'Empate: la 9 vuelve a la mesa', c_m_nobank: 'Directa: no cuenta', c_m_rerack14: 'Se colocan 14 bolas de nuevo', c_m_win14: '¡Objetivo alcanzado! Victoria', c_foul_one: '¡Falta! −1 punto para {o}', c_race: 'Carrera a {n}', c_bank_hint: 'Solo cuentan las bandas · carrera a {n}', c_left_n: 'Quedan {n} bolas',
       c_stars_hint: '★★★ en {a} tiros · ★★ en {b}', 
       g_p8: 'Bola 8', d_p8: 'Lisas contra rayadas, luego la 8', g_p9: 'Bola 9', d_p9: 'Siempre la más baja, la 9 gana',
@@ -2310,6 +2359,7 @@ ar: {
       ru_snk6: '<p>Como el snooker, pero con solo 6 rojas. La partida es más corta y rápida; los colores valen igual, amarilla 2 hasta negra 7. Mismas faltas y regla de bola libre.</p>'
     },
     ar: {
+      g_c3: 'ثلاث حواف', d_c3: 'كارومبول: ثلاث حواف قبل الكرة الثانية', ru_c3: '<p>طاولة بلا جيوب وثلاث كرات: بيضاء وصفراء وحمراء. لكل لاعب كرة واحدة (بيضاء أو صفراء). تُحتسب نقطة عندما تلمس كرتك الكرتين الأخريين وقد لمست ثلاث حواف على الأقل قبل أن تلمس الثانية. النقطة تُبقي الدور لك والإخفاق ينقله. أول من يصل إلى 10 نقاط يفوز.</p>', c_m_c3few: 'أقل من ثلاث حواف', c_m_c3one: 'لم تلمس الكرتين', c_m_win3: 'تم بلوغ الهدف! فوز', c_c3_hint: 'المس الكرتين بعد ثلاث حواف على الأقل',
       g_p10: '10 كرات', d_p10: 'الأقل أولاً والعاشرة تفوز', g_pb: 'بلياردو الحواف', d_pb: 'تُحسب فقط الكرة التي لمست الحافة', g_p14: '14.1 المستمر', d_p14: 'نقطة لكل كرة، سباق إلى 30', ru_p10: '<p>عشر كرات في مثلث، الأولى في الرأس والعاشرة في الوسط. اضرب دائماً أقل كرة أولاً، ومن يُدخل العاشرة بشكل قانوني يفوز. الخطأ يمنح الخصم كرة في اليد، وثلاثة أخطاء متتالية تعني الخسارة.</p>', ru_pb: '<p>تسع كرات. تُحسب نقطة فقط للكرة التي لمست الحافة قبل أن تدخل الجيب، ويبقى الدور لك. الضربة المباشرة لا تُحسب وينتهي دورك. الفائز هو أول من يصل إلى 5 ضربات حافة. الخطأ (دخول البيضاء أو الإخفاق أو عدم لمس حافة) يمنح الخصم كرة في اليد.</p>', ru_p14: '<p>كل كرة تدخل بنقطة دون إعلان. أول من يصل إلى 30 يفوز. الخطأ (دخول البيضاء أو الإخفاق أو عدم لمس حافة بعد الاصطدام) يخصم نقطة. عندما تبقى كرة واحدة تُرتَّب الـ14 الأخرى من جديد ويستمر اللعب.</p>', c_m_win10: 'العاشرة في الجيب! فوز', c_m_respot10: 'العاشرة تعود إلى مكانها', c_m_winbank: 'فوز بالحافة!', c_m_tie_bank: 'تعادل: التاسعة تعود إلى الطاولة', c_m_nobank: 'ضربة مباشرة: لا تُحسب', c_m_rerack14: 'نعيد ترتيب 14 كرة', c_m_win14: 'تم بلوغ الهدف! فوز', c_foul_one: 'خطأ! نقطة أقل لـ{o}', c_race: 'سباق إلى {n}', c_bank_hint: 'تُحسب الحواف فقط · سباق إلى {n}', c_left_n: 'تبقى {n} كرات',
       c_stars_hint: '★★★ خلال {a} ضربات · ★★ خلال {b}', 
       g_p8: 'بلياردو 8', d_p8: 'الملونة مقابل المخططة ثم الثمانية', g_p9: 'بلياردو 9', d_p9: 'دائمًا الأقل رقمًا أولًا والتسعة تفوز',
@@ -2341,7 +2391,7 @@ ar: {
 /* ===== src/app.js ===== */
 'use strict';
 /* CueNest — מעטפת: שפות, אחסון, ניווט, מסכים, אונליין (NestLink). המשחקים נרשמים ב-Games. */
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const store = {
@@ -2638,7 +2688,7 @@ const CueView = (function () {
     const n = out < 0 ? 0 : L, o = n + out * CW; return [[n, g.lo], [n, g.hi], [o, g.hi + eHi], [o, g.lo - eLo]];
   }
   function makeTable(sp, feltIdx, art) {
-    const snk = sp.kind === 'snooker', ppm = snk ? 560 : 720, L = sp.L, W = sp.W, wpx = (L + 2 * PAD) * ppm, hpx = (W + 2 * PAD) * ppm;
+    const snk = sp.kind === 'snooker', carom = sp.kind === 'carom', ppm = snk ? 560 : 720, L = sp.L, W = sp.W, wpx = (L + 2 * PAD) * ppm, hpx = (W + 2 * PAD) * ppm;
     const cv = mk(wpx, hpx), c = cv.getContext('2d'), F = FELTS[+feltIdx || 0];
     c.scale(ppm, ppm); c.translate(PAD, PAD); c.translate(0, W); c.scale(1, -1);     // draw in world coordinates (y up)
     const rr = (x, y, w, h, r) => { c.beginPath(); c.roundRect(x, y, w, h, r); };
@@ -2674,7 +2724,7 @@ const CueView = (function () {
     // pockets
     const hx = L / 2, o = 0.034, rc = snk ? 0.066 : 0.07, rm = snk ? 0.06 : 0.062;
     const pk = [[-o * 0.55, -o * 0.55, rc], [hx, -o * 1.05, rm], [L + o * 0.55, -o * 0.55, rc], [-o * 0.55, W + o * 0.55, rc], [hx, W + o * 1.05, rm], [L + o * 0.55, W + o * 0.55, rc]];
-    for (const p of pk) {
+    for (const p of (carom ? [] : pk)) {
       let gp = c.createRadialGradient(p[0], p[1], p[2] * 0.2, p[0], p[1], p[2] * 1.45); gp.addColorStop(0, '#000'); gp.addColorStop(0.7, '#000'); gp.addColorStop(1, 'rgba(0,0,0,0)');
       c.fillStyle = gp; c.beginPath(); c.arc(p[0], p[1], p[2] * 1.45, 0, 7); c.fill();
       c.fillStyle = '#050505'; c.beginPath(); c.arc(p[0], p[1], p[2], 0, 7); c.fill();
@@ -2792,7 +2842,7 @@ const CueView = (function () {
    The shot that travels between phones is the raw {dx,dy,p,a,b} plus where the cue ball was placed; both phones run the same steps. */
 (function () {
   const C = Cue, K = CueRules, B = CueBot, V = CueView;
-  const LV = { p8: CueLevels.make('p8'), p9: CueLevels.make('p9'), snk: CueLevels.make('snk'), snk6: [], p10: [], pb: [], p14: [] };
+  const LV = { p8: CueLevels.make('p8'), p9: CueLevels.make('p9'), snk: CueLevels.make('snk'), snk6: [], p10: [], pb: [], p14: [], c3: [] };
   const STEPS_MAX = 18, TAU = Math.PI * 2;
   const wrap = a => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
   const clamp = C.clamp;
@@ -2833,7 +2883,7 @@ const CueView = (function () {
       this.g = this.lv ? K.newGame('prac', this.seed, { lv: this.lv }) : K.newGame(this.kind, this.seed, { first: this.net ? (this.seed & 1) : 0 });
       this.Rb = C.prng(this.seed * 7 + 3); this.q = {}; this.sums = {}; this.theirSums = {};
       this.balls = []; for (let i = 0; i < this.g.s.n; i++) this.balls.push(new V.Ball(K.look(this.g, i), i));
-      this.tex = getTable(this.g.sp, S.felt);
+      this.tex = getTable(this.g.sp, this.g.sp.kind === 'carom' && S.felt === '0' ? '1' : S.felt);
       this.cam = new V.Cam(this.g.sp); this.zoomPref = 1;
       this.state = this.net ? 'count' : 'aim'; this.cd = 3.2; this.lastCd = 4; this.t = 0; this.acc = 0; this.ev = null; this.drops = []; this.banners = []; this.bannerT = 0;
       this.ang = 0; this.pw = 0; this.sa = 0; this.sb = 0; this.cueAnim = null; this.bot = null; this.rp = null; this.lastShot = null; this.ptrs = new Map(); this.gesture = null; this.hudSig = ''; this.rowSig = ''; this.statusSig = '';
@@ -3017,12 +3067,14 @@ const CueView = (function () {
       if (R.foul.length) {
         const w = R.foul.map(f => T('c_f_' + f)).join(' · '); Snd.foul();
         this.banner(snk ? T('c_foul_pts', { n: R.fv, o: nm }) : g.kind === 'p14' ? T('c_foul_one', { o: nm }) : T('c_foul_ih', { o: nm }), 'foul', w);
-      } else if (R.pts > 0 && (snk || g.kind === 'pb' || g.kind === 'p14')) this.banner(T('c_pts', { n: R.pts }), 'good');
+      } else if (R.pts > 0 && (snk || g.kind === 'pb' || g.kind === 'p14' || g.kind === 'c3')) this.banner(T('c_pts', { n: R.pts }), 'good');
       else if (R.potted.length) this.banner(T('c_pot'), 'good');
-      else if (R.keep === false && !g.over && this.mode !== 'two') this.banner(T('c_miss'), '');
+      else if (R.keep === false && !g.over && this.mode !== 'two' && g.kind !== 'c3') this.banner(T('c_miss'), '');
       for (const m of R.msg) this.banner(T('c_m_' + m), 'info');
+      if (R.swap) this.rebuildBalls();
       if (this.mode === 'two' && !g.over && g.turn !== who) this.banner(T('c_turn', { n: this.nameOf(g.turn) }), '');
     }
+    rebuildBalls() { if (this.g.kind === 'c3') { this.balls = []; for (let i = 0; i < this.g.s.n; i++) this.balls.push(new V.Ball(K.look(this.g, i), i)); } }
     advance() {
       const g = this.g; let end = null;
       if (this.lv) { const st = K.levelState(this.lv, g); if (st.done) end = st; }
@@ -3036,7 +3088,7 @@ const CueView = (function () {
       if (a !== b) { if (this.me === 1) { Net.link.send({ type: 'bad', k }); toast(T('c_sync'), 2500); } }
     }
     snapshot() { const g = this.g, s = g.s, o = {}; for (const k of ['k', 'turn', 'ih', 'over', 'winner', 'broke', 'open', 'reds', 'phase', 'nextCol', 'free', 'brk']) if (k in g) o[k] = g[k]; o.sc = g.sc.slice(); o.fouls = g.fouls.slice(); if (g.grp) o.grp = g.grp.slice(); if (g.best) o.best = g.best.slice(); o.x = Array.from(s.x); o.y = Array.from(s.y); o.on = Array.from(s.on); return o; }
-    adopt(o) { const g = this.g, s = g.s; for (const k in o) if (!['x', 'y', 'on'].includes(k)) g[k] = Array.isArray(o[k]) ? o[k].slice() : o[k]; for (let i = 0; i < s.n; i++) { s.x[i] = o.x[i]; s.y[i] = o.y[i]; s.on[i] = o.on[i]; s.vx[i] = s.vy[i] = s.wx[i] = s.wy[i] = s.wz[i] = 0; } this.sums = {}; this.theirSums = {}; this.q = {}; this.beginTurn(); }
+    adopt(o) { const g = this.g, s = g.s; for (const k in o) if (!['x', 'y', 'on'].includes(k)) g[k] = Array.isArray(o[k]) ? o[k].slice() : o[k]; for (let i = 0; i < s.n; i++) { s.x[i] = o.x[i]; s.y[i] = o.y[i]; s.on[i] = o.on[i]; s.vx[i] = s.vy[i] = s.wx[i] = s.wy[i] = s.wz[i] = 0; } this.sums = {}; this.theirSums = {}; this.q = {}; this.rebuildBalls(); this.beginTurn(); }
     onMessage(m) {
       const g = this.g;
       if (m.type === 'shot') {
@@ -3061,7 +3113,7 @@ const CueView = (function () {
     /* ---------- finish ---------- */
     finish(end) {
       if (this.state === 'fin') return; this.state = 'fin'; const m = this.mode, st = pg(this.kind), g = this.g; let html = '', btns = '';
-      const sc = (K.isSnk(g.kind) || g.kind === 'pb' || g.kind === 'p14') ? `<p>${T('c_final', { a: g.sc[0], b: g.sc[1] })}</p>` : '';
+      const sc = (K.isSnk(g.kind) || g.kind === 'pb' || g.kind === 'p14' || g.kind === 'c3') ? `<p>${T('c_final', { a: g.sc[0], b: g.sc[1] })}</p>` : '';
       if (m === 'solo') {
         const win = !!end.win, n = this.lv.n;
         if (win) {
@@ -3156,7 +3208,7 @@ const CueView = (function () {
             let sub = '', chips = '', big = '';
             if (g.kind === 'p8') { if (g.open) sub = T('c_open'); else { const grp = g.grp[i]; sub = T(grp === 's' ? 'c_solids' : 'c_stripes'); const mine = K.ballsOf(g, grp); chips = mine.map(b => this.chip(b, !g.s.on[b])).join('') + (mine.every(b => !g.s.on[b]) ? this.chip(8, !g.s.on[8]) : ''); } }
             else if (g.kind === 'p9' || g.kind === 'p10') { sub = g.fouls[i] ? '⚠'.repeat(g.fouls[i]) : ''; }
-            else if (g.kind === 'pb' || g.kind === 'p14') { big = g.sc[i]; sub = T('c_race', { n: g.race }); }
+            else if (g.kind === 'pb' || g.kind === 'p14' || g.kind === 'c3') { big = g.sc[i]; sub = T('c_race', { n: g.race }); }
             else { big = g.sc[i]; sub = g.turn === i && g.brk ? T('c_brk', { n: g.brk }) : ''; }
             h += `<div class="pc ${g.turn === i && !g.over ? 'on' : ''}"><span class="av">${this.avOf(i)}</span><div class="in"><b>${esc(this.nameOf(i))}</b><div class="sub">${sub}</div>${chips ? `<div class="chips">${chips}</div>` : ''}</div>${big !== '' ? `<span class="big">${big}</span>` : ''}</div>`;
           }
@@ -3178,6 +3230,7 @@ const CueView = (function () {
       else if (this.lv) txt = T('c_stars_hint', { a: this.lv.s3, b: this.lv.s2 });
       else if (g.kind === 'p9' || g.kind === 'p10') txt = T('c_low', { n: st.low });
       else if (g.kind === 'pb') txt = T('c_bank_hint', { n: g.race });
+      else if (g.kind === 'c3') txt = T('c_c3_hint');
       else if (g.kind === 'p14') txt = T('c_left_n', { n: st.left });
       else if (g.kind === 'p8' && g.open && !this.lv) txt = T('c_open');
       else txt = this.lv ? T('c_stars_hint', { a: this.lv.s3, b: this.lv.s2 }) : T('c_your');
@@ -3284,13 +3337,14 @@ const CueView = (function () {
       p9: [['#f2c230', 52, 35], ['#1f4fb8', 59, 31], ['#d8322b', 59, 39], ['#5a2a8c', 66, 35], ['#e8d9a0', 66, 27]],
       p10: [['#f2c230', 52, 35], ['#1f4fb8', 59, 31], ['#d8322b', 59, 39], ['#168a4a', 66, 35], ['#1f4fb8', 66, 27]],
       pb: [['#d8322b', 50, 22], ['#f2c230', 62, 40], ['#1f4fb8', 40, 50]],
+      c3: [['#c8201c', 62, 35], ['#f1d12a', 30, 35]],
       p14: [['#d8322b', 52, 35], ['#f2c230', 59, 31], ['#1f4fb8', 59, 39], ['#ee7a1c', 66, 27], ['#168a4a', 66, 35], ['#5a2a8c', 66, 43]],
       snk: [['#c8201c', 54, 31], ['#c8201c', 54, 39], ['#c8201c', 60, 35], ['#f1d12a', 20, 28], ['#2d62d0', 45, 35]],
       snk6: [['#c8201c', 56, 33], ['#c8201c', 56, 37], ['#ee8aa8', 49, 35], ['#0e0f12', 74, 35], ['#1f9a52', 20, 42]]
     }[kind] || [];
     return `<svg viewBox="0 0 90 70" width="90" height="70">${ART.pool}${balls.map(b => `<circle cx="${b[1]}" cy="${b[2]}" r="3.2" fill="${b[0]}"/>`).join('')}<circle cx="28" cy="35" r="3.2" fill="#f4f1e8"/></svg>`;
   }
-  ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'].forEach(kind => {
+  ['p8', 'p9', 'p10', 'pb', 'p14', 'c3', 'snk', 'snk6'].forEach(kind => {
     Games[kind] = {
       ready: true, modes: !LV[kind].length ? ['cpu', 'two', 'online'] : ['solo', 'cpu', 'two', 'online'], levels: LV[kind],
       art() { return artFor(kind); },
@@ -3307,7 +3361,7 @@ const CueView = (function () {
 /* ===== src/shell2.js ===== */
 'use strict';
 /* CueNest — מעטפת AppNest מלאה: בית, אתגר יומי, מדבקות, חוקים, הישגים, הגדרות, גיבוי, אודות, מדריך. */
-const GAME_IDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'snk', 'snk6'], LGAMES = ['p8', 'p9', 'snk'], GICON = { p8: '🎱', p9: '🟡', snk: '🔴', snk6: '🟤', p10: '🔟', pb: '↗️', p14: '🔺' };
+const GAME_IDS = ['p8', 'p9', 'p10', 'pb', 'p14', 'c3', 'snk', 'snk6'], LGAMES = ['p8', 'p9', 'snk'], GICON = { p8: '🎱', p9: '🟡', snk: '🔴', snk6: '🟤', p10: '🔟', pb: '↗️', p14: '🔺', c3: '🔵' };
 const STICKERS = [...LGAMES.map(g => ['first_' + g, GICON[g]]), ['stars10', '⭐'], ['stars50', '🌟'], ['stars150', '🏆'], ['three', '✨'], ['cpu', '🤖'], ['two', '👥'], ['online', '🌐'], ['daily1', '📅'], ['streak3', '🔥'], ['streak7', '☄️']];
 (function () { // מדבקת "שלב ראשון" לכל משחק — טקסטים נבנים משם המשחק בכל שפה (אלא אם כבר קיימים)
   const P = { he: ['שלב ראשון: ', 'סיימו שלב ראשון ב־'], en: ['First level: ', 'Finish a first level in '], ru: ['Первый уровень: ', 'Пройдите первый уровень в '], es: ['Primer nivel: ', 'Supera un primer nivel en '], ar: ['أول مرحلة: ', 'أنهِ أول مرحلة في '] };
