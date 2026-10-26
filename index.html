@@ -243,7 +243,7 @@ input.txt:focus{border-color:var(--acc)}
 <div id="album" class="sc"></div>
 <div id="about" class="sc"></div>
 <script>
-const ART_FILES = ["snk-cue","snk-felt","snk-wood","tile-p8","tile-p9","tile-snk","tile-snk6"];
+const ART_FILES = ["snk-cue","snk-felt","snk-wood","tile-p10","tile-p14","tile-p8","tile-p9","tile-pb","tile-snk","tile-snk6"];
 /* ===== src/nestlink.js ===== */
 /* =====================================================================
    NestLink 1.1 — AppNest online multiplayer module (WebRTC via PeerJS)
@@ -719,10 +719,10 @@ const NestLink = (() => {
   function predict(s, sp, shot, opt) {    // runs the real engine on a copy and records the paths (for the aiming aid)
     opt = opt || {}; const c = clone(s), ev = newEv(s.n), sh = normShot(shot), maxT = opt.maxT || 1.2; strike(c, sp, sh);
     const paths = []; for (let i = 0; i < s.n; i++) paths.push(s.on[i] ? [[s.x[i], s.y[i]]] : null);
-    let last = -1, endAt = -1, k = 0;
+    let last = -1, endAt = -1, k = 0; const t0 = c.t;   // c.t carries the time of earlier shots: all limits are relative to this shot
     for (; k < MAXSTEPS; k++) {
       const alive = step(c, sp, ev); if (k % 2 === 0 || ev.first >= 0) for (let i = 0; i < s.n; i++) if (paths[i] && c.on[i] && (c.vx[i] !== 0 || c.vy[i] !== 0)) { const p = paths[i], q = p[p.length - 1]; if (Math.abs(q[0] - c.x[i]) + Math.abs(q[1] - c.y[i]) > 0.004) p.push([c.x[i], c.y[i]]); }
-      if (ev.first >= 0 && endAt < 0) endAt = c.t + maxT; if (!alive || (endAt > 0 && c.t > endAt) || c.t > (opt.hardT || 6)) break;
+      if (ev.first >= 0 && endAt < 0) endAt = c.t + maxT; if (!alive || (endAt > 0 && c.t > endAt) || c.t - t0 > (opt.hardT || 6)) break;
     }
     return { ev, paths, s: c };
   }
@@ -2341,7 +2341,7 @@ ar: {
 /* ===== src/app.js ===== */
 'use strict';
 /* CueNest — מעטפת: שפות, אחסון, ניווט, מסכים, אונליין (NestLink). המשחקים נרשמים ב-Games. */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const store = {
@@ -2884,7 +2884,8 @@ const CueView = (function () {
     bindInput() {
       const cv = this.cv;
       cv.addEventListener('pointerdown', e => {
-        this.poke(); e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch (x) {}
+        this.poke(); e.preventDefault(); if (e.isPrimary) { this.ptrs.clear(); this.gesture = null; }   // a new first finger: forget fingers whose 'up' was lost (system gesture, palm, app switch)
+        try { cv.setPointerCapture(e.pointerId); } catch (x) {}
         const p = this.pos(e); this.ptrs.set(e.pointerId, { x: p[0], y: p[1], x0: p[0], y0: p[1], t0: performance.now() });
         if (this.rp) { this.stopReplay(); return; }
         if (this.state === 'roll') { this.ff = true; return; }
@@ -2918,7 +2919,7 @@ const CueView = (function () {
           const cs = this.cueScreen(), w = this.cam.toWorld(pt.x, pt.y), s = this.g.s; if (Math.hypot(pt.x - cs[0], pt.y - cs[1]) > 20) { this.ang = Math.atan2(w[1] - s.y[0], w[0] - s.x[0]); this.predKey = ''; }
         }
       };
-      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up); cv.oncontextmenu = e => e.preventDefault();
+      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up); cv.addEventListener('lostpointercapture', up); window.addEventListener('blur', () => { if (this.dead) return; this.ptrs.clear(); this.gesture = null; }); document.addEventListener('visibilitychange', () => { if (this.dead) return; this.ptrs.clear(); this.gesture = null; this.last = performance.now(); }); cv.oncontextmenu = e => e.preventDefault();
     }
     tryPlace(x, y) {      // drag the cue ball while it is in hand: nearest legal spot
       const g = this.g, s = g.s, sp = g.sp, R = sp.R; let px = clamp(x, R, sp.L - R), py = clamp(y, R, sp.W - R);
@@ -3096,10 +3097,10 @@ const CueView = (function () {
     /* ---------- the loop ---------- */
     loop(now) {
       if (this.dead) return; const dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
-      if (!this.paused) this.update(dt);
+      try { if (!this.paused) this.update(dt); } catch (e) { this.fails = (this.fails || 0) + 1; console.error('update', e); if (this.state === 'roll' && this.fails > 3) { try { this.finishRoll(); } catch (e2) {} } }
       this.t += dt;
       const idle = this.state === 'aim' && !this.cueAnim && !this.bot && !this.rp && !this.drops.length && !this.banners.length && this.ptrs.size === 0 && !this.paused && now > (this.wake || 0) && Math.abs(this.cam.cu - this.cam.tu) + Math.abs(this.cam.cv - this.cam.tv) + Math.abs(this.cam.s - this.cam.scale()) < 0.002 && !(this.g.ih && this.humanTurn());
-      if (!idle || now - (this.lastDraw || 0) > 160) { this.draw(dt); this.lastDraw = now; }
+      if (!idle || now - (this.lastDraw || 0) > 160) { try { this.draw(dt); } catch (e) { console.error('draw', e); } this.lastDraw = now; }
       this.raf = requestAnimationFrame(t => this.loop(t));
     }
     poke() { this.wake = performance.now() + 400; }
